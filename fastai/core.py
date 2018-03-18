@@ -7,6 +7,9 @@ conv_dict = {np.dtype('int8'): torch.LongTensor, np.dtype('int16'): torch.LongTe
     np.dtype('int32'): torch.LongTensor, np.dtype('int64'): torch.LongTensor,
     np.dtype('float32'): torch.FloatTensor, np.dtype('float64'): torch.FloatTensor}
 
+def A(*a):
+    return np.array(a[0]) if len(a)==1 else [np.array(o) for o in a]
+
 def T(a):
     if torch.is_tensor(a): res = a
     else:
@@ -43,7 +46,7 @@ def to_gpu(x, *args, **kwargs):
 def noop(*args, **kwargs): return
 
 def split_by_idxs(seq, idxs):
-    last, sl = 0, len(seq)
+    last = 0
     for idx in idxs:
         yield seq[last:idx]
         last = idx
