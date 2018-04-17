@@ -32,48 +32,36 @@ class Stepper():
         self.m,self.opt,self.crit,self.clip,self.reg_fn = m,opt,crit,clip,reg_fn
         self.fp16 = fp16
         self.reset(True)
-        self.loss_scale = loss_scale if fp16 else 1
         if self.fp16: self.fp32_params = copy_model_to_fp32(m, opt)
+        self.loss_scale = loss_scale
 
     def reset(self, train=True):
         if train: apply_leaf(self.m, set_train_mode)
         else: self.m.eval()
         if hasattr(self.m, 'reset'):
             self.m.reset()
-            #if self.fp16: self.fp32_params = copy_model_to_fp32(self.m, self.opt)
+            if self.fp16: self.fp32_params = copy_model_to_fp32(self.m, self.opt)
 
     def step(self, xs, y, epoch):
-        if self.fp16: return self.step_fp16(xs, y, epoch)
         xtra = []
         output = self.m(*xs)
         if isinstance(output,tuple): output,*xtra = output
-        self.opt.zero_grad()
+        if self.fp16: self.m.zero_grad()
+        else: self.opt.zero_grad() 
         loss = raw_loss = self.crit(output, y)
+        if self.loss_scale != 1: assert(self.fp16); loss = loss*self.loss_scale
         if self.reg_fn: loss = self.reg_fn(output, xtra, raw_loss)
         loss.backward()
-        if self.clip:   # Gradient clipping
-            nn.utils.clip_grad_norm(trainable_params_(self.m), self.clip)
-        self.opt.step()
-        return torch_item(raw_loss.data)
-
-
-    def step_fp16(self, xs, y, epoch):
-        xtra = []
-        output = self.m(*xs)
-        if isinstance(output,tuple): output,*xtra = output
-        self.m.zero_grad()
-        loss = raw_loss = self.crit(output, y)
-        if self.loss_scale != 1: loss = loss*self.loss_scale
-        if self.reg_fn: loss = self.reg_fn(output, xtra, raw_loss)
-        loss.backward()
-        update_fp32_grads(self.fp32_params, self.m)
+        if self.fp16: update_fp32_grads(self.fp32_params, self.m)
         if self.loss_scale != 1:
             for param in self.fp32_params: param.grad.data.div_(self.loss_scale)
         if self.clip:   # Gradient clipping
-            nn.utils.clip_grad_norm(trainable_params_(self.fp32_params), self.clip)
+            nn.utils.clip_grad_norm(trainable_params_(self.m), self.clip)
         self.opt.step()
-        copy_fp32_to_model(self.m, self.fp32_params)
-        return raw_loss.data[0]
+        if self.fp16: 
+            copy_fp32_to_model(self.m, self.fp32_params)
+            torch.cuda.synchronize()
+        return torch_item(raw_loss.data)
 
     def evaluate(self, xs, y):
         preds = self.m(*xs)
@@ -100,6 +88,8 @@ def fit(model, data, epochs, opt, crit, metrics=None, callbacks=None, stepper=St
        crit: loss function to optimize. Example: F.cross_entropy
     """
     all_val = kwargs.pop('all_val') if 'all_val' in kwargs else False
+    sampler = kwargs.pop('sampler') if 'sampler' in kwargs else None
+    get_ep_vals = kwargs.pop('get_ep_vals') if 'get_ep_vals' in kwargs else False
     stepper = stepper(model, opt, crit, **kwargs)
     metrics = metrics or []
     callbacks = callbacks or []
@@ -114,7 +104,9 @@ def fit(model, data, epochs, opt, crit, metrics=None, callbacks=None, stepper=St
         num_batch = int(num_batch*epochs)
         epochs = 1
 
+    ep_vals = collections.OrderedDict()
     for epoch in tnrange(epochs, desc='Epoch'):
+        if sampler: sampler.set_epoch(epoch)
         stepper.reset(True)
         t = tqdm(iter(data.trn_dl), leave=False, total=num_batch)
         i = 0
@@ -137,13 +129,20 @@ def fit(model, data, epochs, opt, crit, metrics=None, callbacks=None, stepper=St
             vals = validate(stepper, data.val_dl, metrics)
             if epoch == 0: print(layout.format(*names))
             print_stats(epoch, [debias_loss] + vals)
+            ep_vals = append_stats(ep_vals, epoch, [debias_loss] + vals)
             stop=False
             for cb in callbacks: stop = stop or cb.on_epoch_end(vals)
         if stop: break
 
     for cb in callbacks: cb.on_train_end()
-    return vals
+    if get_ep_vals:
+        return vals, ep_vals
+    else:
+        return vals
 
+def append_stats(ep_vals, epoch, values, decimals=6):
+    ep_vals[epoch]=list(np.round(values, decimals))
+    return ep_vals
 
 def print_stats(epoch, values, decimals=6):
     layout = "{!s:^10}" + " {!s:10}" * len(values)
@@ -155,9 +154,8 @@ class IterBatch():
         self.idx = 0
         self.dl = dl
         self.iter = iter(dl)
-    
-    def __iter__(self):
-        return self
+
+    def __iter__(self): return self
 
     def next(self):
         res = next(self.iter)
@@ -165,7 +163,7 @@ class IterBatch():
         if self.idx == len(self.dl):
             self.iter = iter(self.dl)
             self.idx=0
-        return res 
+        return res
 
 def validate_next(stepper, metrics, val_iter):
     """Computes the loss on the next minibatch of the validation set."""
@@ -180,13 +178,17 @@ def validate_next(stepper, metrics, val_iter):
 def validate(stepper, dl, metrics):
     batch_cnts,loss,res = [],[],[]
     stepper.reset(False)
-    for (*x,y) in iter(dl):
-        preds,l = stepper.evaluate(VV(x), VV(y))
-        if isinstance(x,list): batch_cnts.append(len(x[0]))
-        else: batch_cnts.append(len(x))
-        loss.append(to_np(l))
-        res.append([f(preds.data,y) for f in metrics])
+    with no_grad_context():
+        for (*x,y) in iter(dl):
+            y = VV(y)
+            preds,l = stepper.evaluate(VV(x), y)
+            if isinstance(x,list): batch_cnts.append(len(x[0]))
+            else: batch_cnts.append(len(x))
+            loss.append(to_np(l))
+            res.append([f(preds.data,y.data) for f in metrics])
     return [np.average(loss, 0, weights=batch_cnts)] + list(np.average(np.stack(res), 0, weights=batch_cnts))
+
+def no_grad_context(): return torch.no_grad() if IS_TORCH_04 else contextlib.suppress()
 
 def get_prediction(x):
     if is_listy(x): x=x[0]

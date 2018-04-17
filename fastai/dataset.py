@@ -233,6 +233,9 @@ def open_image(fn):
     elif os.path.isdir(fn):
         raise OSError('Is a directory: {}'.format(fn))
     else:
+        #res = np.array(Image.open(fn), dtype=np.float32)/255
+        #if len(res.shape)==2: res = np.repeat(res[...,None],3,2)
+        #return res
         try:
             im = cv2.imread(str(fn), flags).astype(np.float32)/255
             if im is None: raise OSError(f'File not recognized by opencv: {fn}')

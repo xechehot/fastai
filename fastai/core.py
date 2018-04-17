@@ -6,33 +6,35 @@ def sum_geom(a,r,n): return a*n if r==1 else math.ceil(a*(1-r**n)/(1-r))
 def is_listy(x): return isinstance(x, (list,tuple))
 def is_iter(x): return isinstance(x, collections.Iterable)
 def map_over(x, f): return [f(o) for o in x] if is_listy(x) else f(x)
+def map_none(x, f): return None if x is None else f(x)
 
 conv_dict = {np.dtype('int8'): torch.LongTensor, np.dtype('int16'): torch.LongTensor,
     np.dtype('int32'): torch.LongTensor, np.dtype('int64'): torch.LongTensor,
     np.dtype('float32'): torch.FloatTensor, np.dtype('float64'): torch.FloatTensor}
 
-def A(*a):
-    return np.array(a[0]) if len(a)==1 else [np.array(o) for o in a]
+def A(*a): return np.array(a[0]) if len(a)==1 else [np.array(o) for o in a]
 
-def T_(a):
-    if torch.is_tensor(a): return a
-    a = np.array(np.ascontiguousarray(a))
-    if a.dtype in (np.int8, np.int16, np.int32, np.int64):
-        return torch.LongTensor(a.astype(np.int64))
-    if a.dtype in (np.float32, np.float64):
-        return torch.FloatTensor(a.astype(np.float32))
-    raise NotImplementedError(a.dtype)
-def T(a): return to_gpu(T_(a), async=True)
+def T(a, half=False, cuda=True):
+    if not torch.is_tensor(a):
+        a = np.array(np.ascontiguousarray(a))
+        if a.dtype in (np.int8, np.int16, np.int32, np.int64):
+            a = torch.LongTensor(a.astype(np.int64))
+        elif a.dtype in (np.float32, np.float64):
+            a = torch.cuda.HalfTensor(a) if half else torch.FloatTensor(a)
+        else: raise NotImplementedError(a.dtype)
+    if cuda: a = to_gpu(a, async=True)
+    return a
 
 def create_variable(x, volatile, requires_grad=False):
-    if not isinstance(x, Variable):
-        x = Variable(T(x), volatile=volatile, requires_grad=requires_grad)
+    if type (x) != Variable:
+        if IS_TORCH_04: x = Variable(T(x), requires_grad=requires_grad)
+        else:           x = Variable(T(x), requires_grad=requires_grad, volatile=volatile)
     return x
 
 def V_(x, requires_grad=False, volatile=False): return create_variable(x, volatile, requires_grad)
-def VV_(x):                                     return create_variable(x, True)
-def V(x, requires_grad=False, volatile=False): return map_over(x, lambda o: V_(o, requires_grad, volatile))
-def VV(x):                                     return map_over(x, VV_)
+def V (x, requires_grad=False, volatile=False): return map_over(x, lambda o: V_(o, requires_grad, volatile))
+def VV_(x): return create_variable(x, True)
+def VV (x): return map_over(x, VV_)
 
 def to_np(v):
     if isinstance(v, (np.ndarray, np.generic)): return v
@@ -41,9 +43,10 @@ def to_np(v):
     if isinstance(v, torch.cuda.HalfTensor): v=v.float()
     return v.cpu().numpy()
 
-USE_GPU=True
+IS_TORCH_04 = LooseVersion(torch.__version__) >= LooseVersion('0.4')
+USE_GPU = torch.cuda.is_available()
 def to_gpu(x, *args, **kwargs):
-    return x.cuda(*args, **kwargs) if torch.cuda.is_available() and USE_GPU else x
+    return x.cuda(*args, **kwargs) if USE_GPU else x
 
 def noop(*args, **kwargs): return
 
