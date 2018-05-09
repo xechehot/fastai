@@ -39,7 +39,8 @@ class SimpleNB(nn.Module):
 class BOW_Learner(Learner):
     def __init__(self, data, models, **kwargs):
         super().__init__(data, models, **kwargs)
-        self.crit = F.l1_loss
+
+    def _get_crit(self, data): return F.l1_loss
 
 def calc_pr(y_i, x, y, b):
     idx = np.argwhere((y==y_i)==b)
@@ -152,12 +153,15 @@ class LanguageModelLoader():
         seq_len = min(seq_len, len(source) - 1 - i)
         return source[i:i+seq_len], source[i+1:i+1+seq_len].view(-1)
 
+
 class RNN_Learner(Learner):
     def __init__(self, data, models, **kwargs):
         super().__init__(data, models, **kwargs)
-        self.crit = F.cross_entropy
+
+    def _get_crit(self, data): return F.cross_entropy
 
     def save_encoder(self, name): save_model(self.model[0], self.get_model_path(name))
+
     def load_encoder(self, name): load_model(self.model[0], self.get_model_path(name))
 
 
@@ -200,7 +204,7 @@ class LanguageModelData():
     """
     This class provides the entry point for dealing with supported NLP tasks.
     Usage:
-    1.  Use one of the factory constructors (from_dataframes, from_text-files) to
+    1.  Use one of the factory constructors (from_dataframes, from_text_files) to
         obtain an instance of the class.
     2.  Use the get_model method to return a RNN_Learner instance (a network suited
         for NLP tasks), then proceed with training.
@@ -228,7 +232,7 @@ class LanguageModelData():
             that the field's "build_vocab" method is invoked, which builds the vocabulary
             for this NLP model.
 
-            Also, three instances of the LanguageModelLoader is constructed; one each
+            Also, three instances of the LanguageModelLoader are constructed; one each
             for training data (self.trn_dl), validation data (self.val_dl), and the
             testing data (self.test_dl)
 
