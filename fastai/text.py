@@ -17,7 +17,7 @@ def texts_labels_from_folders(path, folders):
     return texts, np.array(labels).astype(np.int64)
 
 def numericalize_tok(tokens, max_vocab=50000, min_freq=0, unk_tok="_unk_", pad_tok="_pad_", bos_tok="_bos_", eos_tok="_eos_"):
-    """Takes in text tokens and returns int2tok and tok2int coverters
+    """Takes in text tokens and returns int2tok and tok2int converters
 
         Arguments:
         tokens(list): List of tokens. Can be a list of strings, or a list of lists of strings.
@@ -137,9 +137,11 @@ class SortishSampler(Sampler):
         idxs = np.random.permutation(len(self.data_source))
         sz = self.bs*50
         ck_idx = [idxs[i:i+sz] for i in range(0, len(idxs), sz)]
-        sort_idx = sum([sorted(s, key=self.key, reverse=True) for s in ck_idx], [])
+        sort_idx = np.concatenate([sorted(s, key=self.key, reverse=True) for s in ck_idx])
         sz = self.bs
         ck_idx = [sort_idx[i:i+sz] for i in range(0, len(sort_idx), sz)]
+        max_ck = np.argmax([ck[0] for ck in ck_idx])  # find the chunk with the largest key,
+        ck_idx[0],ck_idx[max_ck] = ck_idx[max_ck],ck_idx[0]  # then make sure it goes first.
         sort_idx = np.concatenate(np.random.permutation(ck_idx[1:]))
         sort_idx = np.concatenate((ck_idx[0], sort_idx))
         return iter(sort_idx)
@@ -191,7 +193,7 @@ class LanguageModel(BasicModel):
 
 
 class LanguageModelData():
-    def __init__(self, path, pad_idx, n_tok, trn_dl, val_dl, test_dl=None, bptt=70, backwards=False, **kwargs):
+    def __init__(self, path, pad_idx, n_tok, trn_dl, val_dl, test_dl=None, **kwargs):
         self.path,self.pad_idx,self.n_tok = path,pad_idx,n_tok
         self.trn_dl,self.val_dl,self.test_dl = trn_dl,val_dl,test_dl
 
@@ -204,7 +206,8 @@ class LanguageModelData():
 class RNN_Learner(Learner):
     def __init__(self, data, models, **kwargs):
         super().__init__(data, models, **kwargs)
-        self.crit = F.cross_entropy
+
+    def _get_crit(self, data): return F.cross_entropy
 
     def save_encoder(self, name): save_model(self.model[0], self.get_model_path(name))
     def load_encoder(self, name): load_model(self.model[0], self.get_model_path(name))
