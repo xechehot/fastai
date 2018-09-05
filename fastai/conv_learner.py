@@ -124,6 +124,17 @@ class ConvLearner(Learner):
     
     @property
     def model(self): return self.models.fc_model if self.precompute else self.models.model
+    
+    def half(self):
+        if self.fp16: return
+        self.fp16 = True
+        if type(self.model) != FP16: self.models.model = FP16(self.model)
+        if not isinstance(self.models.fc_model, FP16): self.models.fc_model = FP16(self.models.fc_model)
+    def float(self):
+        if not self.fp16: return
+        self.fp16 = False
+        if type(self.models.model) == FP16: self.models.model = self.model.module.float()
+        if type(self.models.fc_model) == FP16: self.models.fc_model = self.models.fc_model.module.float()
 
     @property
     def data(self): return self.fc_data if self.precompute else self.data_
@@ -196,3 +207,19 @@ class ConvLearner(Learner):
         """
         self.freeze_to(0)
         self.precompute = False
+
+    def predict_array(self, arr):
+        """
+        This over-ride is necessary because otherwise the learner method accesses the wrong model when it is called
+        with precompute set to true
+
+        Args:
+            arr: a numpy array to be used as input to the model for prediction purposes
+        Returns:
+            a numpy array containing the predictions from the model
+        """
+        precompute = self.precompute
+        self.precompute = False
+        pred = super().predict_array(arr)
+        self.precompute = precompute
+        return pred

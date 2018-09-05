@@ -96,8 +96,8 @@ def cutout(im, n_holes, length):
     r,c,*_ = im.shape
     mask = np.ones((r, c), np.int32)
     for n in range(n_holes):
-        y = np.random.randint(length / 2, r - length / 2)
-        x = np.random.randint(length / 2, c - length / 2)
+        y = np.random.randint(0, r)
+        x = np.random.randint(0, c)
 
         y1 = int(np.clip(y - length / 2, 0, r))
         y2 = int(np.clip(y + length / 2, 0, r))
@@ -542,7 +542,7 @@ class RandomBlur(Transform):
         if np.any(self.blur_strengths < 0):
             raise ValueError("all blur_strengths must be > 0")
         self.probability = probability
-        self.apply_transform = False
+        self.store.apply_transform = False
 
     def set_state(self):
         self.store.apply_transform = random.random() < self.probability
@@ -550,15 +550,27 @@ class RandomBlur(Transform):
         self.store.kernel = (kernel_size, kernel_size)
 
     def do_transform(self, x, is_y):
-        return cv2.GaussianBlur(src=x, ksize=self.store.kernel, sigmaX=0) if self.apply_transform else x
+        return cv2.GaussianBlur(src=x, ksize=self.store.kernel, sigmaX=0) if self.store.apply_transform else x
 
 class Cutout(Transform):
-    def __init__(self, n_holes, length, tfm_y=TfmType.NO):
+    """ Randomly masks squares of size length on the image.
+    https://arxiv.org/pdf/1708.04552.pdf
+    
+    Arguments:
+    n_holes: number of squares
+    length: size of the square
+    p: probability to apply cutout
+    tfm_y: type of y transform
+    """
+    def __init__(self, n_holes, length, p=0.5, tfm_y=TfmType.NO):
         super().__init__(tfm_y)
-        self.n_holes,self.length = n_holes,length
+        self.n_holes, self.length, self.p = n_holes, length, p
+
+    def set_state(self):
+        self.apply_transform = random.random() < self.p
 
     def do_transform(self, img, is_y):
-        return cutout(img, self.n_holes, self.length)
+        return cutout(img, self.n_holes, self.length) if self.apply_transform else img
 
 class GoogleNetResize(CoordTransform):
     """ Randomly crops an image with an aspect ratio and returns a squared resized image of size targ 

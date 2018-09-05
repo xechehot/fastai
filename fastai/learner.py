@@ -8,7 +8,6 @@ from .sgdr import *
 from .layer_optimizer import *
 from .layers import *
 from .metrics import *
-from .losses import *
 from .swa import *
 from .fp16 import *
 from .lsuv_initializer import apply_lsuv_init
@@ -28,10 +27,9 @@ class Learner():
         metrics(list): array of functions for evaluating a desired metric. Eg. accuracy.
         clip(float): gradient clip chosen to limit the change in the gradient to prevent exploding gradients Eg. .3
         """
-        self.data_,self.models,self.metrics = data,models,metrics
+        self.data_,self.models,self.metrics,self.clip = data,models,metrics,clip
         self.sched=None
         self.wd_sched = None
-        self.clip = None
         self.opt_fn = opt_fn or SGD_Momentum(0.9)
         self.tmp_path = tmp_name if os.path.isabs(tmp_name) else os.path.join(self.data.path, tmp_name)
         self.models_path = models_name if os.path.isabs(models_name) else os.path.join(self.data.path, models_name)
@@ -83,6 +81,17 @@ class Learner():
         c=self.get_layer_groups()
         for l in c: set_trainable(l, False)
         set_trainable(c[n], True)
+        
+    def freeze_groups(self, groups):
+        c = self.get_layer_groups()
+        self.unfreeze()
+        for g in groups:
+            set_trainable(c[g], False)
+            
+    def unfreeze_groups(self, groups):
+        c = self.get_layer_groups()
+        for g in groups:
+            set_trainable(c[g], True)
 
     def unfreeze(self): self.freeze_to(0)
 
@@ -144,7 +153,8 @@ class Learner():
                 the cycles. For an intuitive explanation, please see
                 https://github.com/fastai/fastai/blob/master/courses/dl1/lesson1.ipynb
 
-            cycle_save_name (str): use to save the weights at end of each cycle
+            cycle_save_name (str): use to save the weights at end of each cycle (requires
+                use_clr, use_clr_beta or cycle_len arg)
 
             best_save_name (str): use to save weights of best model during training.
 
@@ -185,6 +195,9 @@ class Learner():
             None
         """
 
+        if cycle_save_name:
+            assert use_clr or use_clr_beta or cycle_len, "cycle_save_name argument requires either of the following arguments use_clr, use_clr_beta, cycle_len"
+
         if callbacks is None: callbacks=[]
         if metrics is None: metrics=self.metrics
 
@@ -204,12 +217,14 @@ class Learner():
             clr_div,cut_div = use_clr[:2]
             moms = use_clr[2:] if len(use_clr) > 2 else None
             cycle_end = self.get_cycle_end(cycle_save_name)
+            assert cycle_len, "use_clr requires cycle_len arg"
             self.sched = CircularLR(layer_opt, len(data.trn_dl)*cycle_len, on_cycle_end=cycle_end, div=clr_div, cut_div=cut_div,
                                     momentums=moms)
         elif use_clr_beta is not None:
             div,pct = use_clr_beta[:2]
             moms = use_clr_beta[2:] if len(use_clr_beta) > 3 else None
             cycle_end = self.get_cycle_end(cycle_save_name)
+            assert cycle_len, "use_clr_beta requires cycle_len arg"
             self.sched = CircularLR_beta(layer_opt, len(data.trn_dl)*cycle_len, on_cycle_end=cycle_end, div=div,
                                     pct=pct, momentums=moms)
         elif cycle_len:
@@ -364,6 +379,13 @@ class Learner():
     def predict_dl(self, dl): return predict_with_targs(self.model, dl)[0]
 
     def predict_array(self, arr):
+        """
+        Args:
+            arr: a numpy array to be used as input to the model for prediction purposes
+        Returns:
+            a numpy array containing the predictions from the model
+        """
+        if not isinstance(arr, np.ndarray): raise OSError(f'Not valid numpy array')
         self.model.eval()
         return to_np(self.model(to_gpu(V(T(arr)))))
 
@@ -375,7 +397,7 @@ class Learner():
         is to increase the accuracy of predictions by examining the images using multiple
         perspectives.
 
-        Args:
+
             n_aug: a number of augmentation images to use per original image
             is_test: indicate to use test images; otherwise use validation images
 

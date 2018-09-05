@@ -14,6 +14,10 @@ def listify(x, y):
     if len(x)==1: x = x * n
     return x
 
+def datafy(x):
+    if is_listy(x): return [o.data for o in x]
+    else:           return x.data
+
 conv_dict = {np.dtype('int8'): torch.LongTensor, np.dtype('int16'): torch.LongTensor,
     np.dtype('int32'): torch.LongTensor, np.dtype('int64'): torch.LongTensor,
     np.dtype('float32'): torch.FloatTensor, np.dtype('float64'): torch.FloatTensor}
@@ -25,17 +29,23 @@ def A(*a):
 def T(a, half=False, cuda=True):
     """
     Convert numpy array into a pytorch tensor. 
-    if Cuda is available and USE_GPU=ture, store resulting tensor in GPU.
+    if Cuda is available and USE_GPU=True, store resulting tensor in GPU.
     """
     if not torch.is_tensor(a):
         a = np.array(np.ascontiguousarray(a))
         if a.dtype in (np.int8, np.int16, np.int32, np.int64):
             a = torch.LongTensor(a.astype(np.int64))
         elif a.dtype in (np.float32, np.float64):
-            a = torch.cuda.HalfTensor(a) if half else torch.FloatTensor(a)
+            a = to_half(a) if half else torch.FloatTensor(a)
         else: raise NotImplementedError(a.dtype)
     if cuda: a = to_gpu(a, async=True)
     return a
+
+def to_half(tensor):
+    if torch.cuda.is_available():
+        return torch.cuda.HalfTensor(tensor)
+    else:
+        return torch.FloatTensor(tensor)
 
 def create_variable(x, volatile, requires_grad=False):
     if type (x) != Variable:
@@ -63,13 +73,19 @@ def to_np(v):
     if isinstance(v, (np.ndarray, np.generic)): return v
     if isinstance(v, (list,tuple)): return [to_np(o) for o in v]
     if isinstance(v, Variable): v=v.data
-    if isinstance(v, torch.cuda.HalfTensor): v=v.float()
+    if torch.cuda.is_available():
+        if is_half_tensor(v): v=v.float()
+    if isinstance(v, torch.FloatTensor): v=v.float()
     return v.cpu().numpy()
+
+def is_half_tensor(v):
+    return isinstance(v, torch.cuda.HalfTensor)
+
 
 IS_TORCH_04 = LooseVersion(torch.__version__) >= LooseVersion('0.4')
 USE_GPU = torch.cuda.is_available()
 def to_gpu(x, *args, **kwargs):
-    '''puts pytorch variable to gpu, if cuda is avaialble and USE_GPU is set to true. '''
+    '''puts pytorch variable to gpu, if cuda is available and USE_GPU is set to true. '''
     return x.cuda(*args, **kwargs) if USE_GPU else x
 
 def noop(*args, **kwargs): return
@@ -153,7 +169,7 @@ def load(fn):
     """Utility function that loads model, function, etc as pickle"""
     return pickle.load(open(fn,'rb'))
 def load2(fn):
-    """Utility funciton allowing model piclking across Python2 and Python3"""
+    """Utility function allowing model piclking across Python2 and Python3"""
     return pickle.load(open(fn,'rb'), encoding='iso-8859-1')
 
 def load_array(fname): 

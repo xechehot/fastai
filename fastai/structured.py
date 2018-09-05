@@ -105,7 +105,11 @@ def add_datepart(df, fldname, drop=True, time=False):
     2   2000  3      11    13   0          73         False         False           False           False             False        False          952905600
     """
     fld = df[fldname]
-    if not np.issubdtype(fld.dtype, np.datetime64):
+    fld_dtype = fld.dtype
+    if isinstance(fld_dtype, pd.core.dtypes.dtypes.DatetimeTZDtype):
+        fld_dtype = np.datetime64
+
+    if not np.issubdtype(fld_dtype, np.datetime64):
         df[fldname] = fld = pd.to_datetime(fld, infer_datetime_format=True)
     targ_pre = re.sub('[Dd]ate$', '', fldname)
     attr = ['Year', 'Month', 'Week', 'Day', 'Dayofweek', 'Dayofyear',
@@ -119,7 +123,7 @@ def is_date(x): return np.issubdtype(x.dtype, np.datetime64)
 
 def train_cats(df):
     """Change any columns of strings in a panda's dataframe to a column of
-    catagorical values. This applies the changes inplace.
+    categorical values. This applies the changes inplace.
 
     Parameters:
     -----------
@@ -315,7 +319,7 @@ def numericalize(df, col, name, max_n_cat):
     1     2    b    2
     2     3    a    1
     """
-    if not is_numeric_dtype(col) and ( max_n_cat is None or col.nunique()>max_n_cat):
+    if not is_numeric_dtype(col) and ( max_n_cat is None or len(col.cat.categories)>max_n_cat):
         df[name] = col.cat.codes+1
 
 def scale_vars(df, mapper):
@@ -421,9 +425,9 @@ def proc_df(df, y_fld=None, skip_flds=None, ignore_flds=None, do_scale=False, na
     if not ignore_flds: ignore_flds=[]
     if not skip_flds: skip_flds=[]
     if subset: df = get_sample(df,subset)
+    else: df = df.copy()
     ignored_flds = df.loc[:, ignore_flds]
     df.drop(ignore_flds, axis=1, inplace=True)
-    df = df.copy()
     if preproc_fn: preproc_fn(df)
     if y_fld is None: y = None
     else:
